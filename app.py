@@ -1,8 +1,10 @@
-from flask import Flask, render_template, jsonify, request
+from flask import Flask, render_template, request, jsonify
 import requests
 from datetime import datetime
 import time
 import logging
+import csv
+import json
 
 # 配置日志
 logging.basicConfig(level=logging.INFO)
@@ -10,7 +12,9 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
-# def fetch_data(contest_id='104226', status_type_filter=5):
+# 存储气球状态的数据结构
+balloon_status = {}
+
 def fetch_data(contest_id, status_type_filter):
     """从API获取数据并处理
     Args:
@@ -96,11 +100,32 @@ def format_date(timestamp):
 def index():
     return render_template('index.html')
 
+@app.route('/balloon')
+def balloon():
+    return render_template('balloon.html')
+
+@app.route('/res.csv')
+def get_res_csv():
+    try:
+        with open('res.csv', 'r', encoding='utf-8') as f:
+            return f.read()
+    except Exception as e:
+        return str(e), 500
+
+@app.route('/a.csv')
+def get_a_csv():
+    try:
+        with open('a.csv', 'r', encoding='utf-8') as f:
+            return f.read()
+    except Exception as e:
+        return str(e), 500
+
 @app.route('/api/data')
 def get_data():
     # 从查询参数中获取比赛ID和状态过滤器
     contest_id = request.args.get('contestId', '104226')
-    status_type_filter = request.args.get('statusTypeFilter')
+    # status_type_filter = request.args.get('statusTypeFilter')
+    status_type_filter = 5
     
     # 只有当statusTypeFilter有值时才转换为整数
     if status_type_filter is not None:
@@ -116,7 +141,83 @@ def get_data():
     for item in unique_data:
         item['submitTime'] = format_date(item['submitTime'])
     
+    # 将数据保存到res.csv文件
+    try:
+        # 读取已有数据的最后一条记录时间
+        last_submit_time = None
+        try:
+            with open('res.csv', 'r', newline='', encoding='utf-8') as f:
+                reader = csv.DictReader(f)
+                rows = list(reader)
+                # 如果文件存在但为空，或者没有有效数据行，last_submit_time保持为None
+                if rows:
+                    last_submit_time = datetime.strptime(rows[-1]['submitTime'], '%Y-%m-%d %H:%M:%S')
+        except FileNotFoundError:
+            # 如果文件不存在，创建文件并写入表头
+            with open('res.csv', 'w', newline='', encoding='utf-8') as f:
+                writer = csv.DictWriter(f, fieldnames=['userId', 'userName', 'problemId', 'submitTime', 'balloonStatus'])
+                writer.writeheader()
+
+        # 追加写入新数据
+        with open('res.csv', 'a', newline='', encoding='utf-8') as f:
+            writer = csv.DictWriter(f, fieldnames=['userId', 'userName', 'problemId', 'submitTime', 'balloonStatus'])
+            for item in unique_data:
+                current_time = datetime.strptime(item['submitTime'], '%Y-%m-%d %H:%M:%S')
+                # 只写入时间在最后一条记录之后的数据
+                if last_submit_time is None or current_time > last_submit_time:
+                    writer.writerow({
+                        'userId': item['userId'],
+                        'userName': item['userName'],
+                        'problemId': item['index'],
+                        'submitTime': item['submitTime'],
+                        'balloonStatus': 'not_given'
+                    })
+        logger.info('数据已成功追加保存到res.csv文件')
+    except Exception as e:
+        logger.error(f'保存数据到res.csv失败: {str(e)}')
+    
     return jsonify(unique_data)
+
+@app.route('/balloon/status', methods=['POST'])
+def update_balloon_status():
+    data = request.json
+    user_id = data.get('userId')
+    problem_id = data.get('problemId')
+    is_given = data.get('isGiven')
+    
+    if not all([user_id, problem_id, isinstance(is_given, bool)]):
+        return jsonify({'error': '参数不完整'}), 400
+    
+    key = f"{user_id}_{problem_id}"
+    balloon_status[key] = {
+        'isGiven': is_given,
+        'updateTime': datetime.now().isoformat()
+    }
+    
+    # 更新res.csv文件中的气球状态
+    try:
+        rows = []
+        with open('res.csv', 'r', newline='', encoding='utf-8') as f:
+            reader = csv.DictReader(f)
+            rows = list(reader)
+            
+        for row in rows:
+            if row['userId'] == user_id and row['problemId'] == problem_id:
+                row['balloonStatus'] = 'given' if is_given else 'not_given'
+        
+        with open('res.csv', 'w', newline='', encoding='utf-8') as f:
+            writer = csv.DictWriter(f, fieldnames=['userId', 'userName', 'problemId', 'submitTime', 'balloonStatus'])
+            writer.writeheader()
+            writer.writerows(rows)
+    except Exception as e:
+        logger.error(f'更新气球状态失败: {str(e)}')
+        return jsonify({'error': '更新气球状态失败'}), 500
+    
+    return jsonify({'success': True})
+
+@app.route('/balloon/status', methods=['GET'])
+def get_balloon_status():
+    return jsonify(balloon_status)
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5173, debug=True)
