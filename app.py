@@ -63,7 +63,6 @@ def fetch_data(contest_id, status_type_filter):
             # 获取全量数据
             if pageCount is None:
                 basic_info = data['data'].get('basicInfo', {})
-                logger.info(f'获取基本信息: {basic_info}')
                 pageCount = (int)(basic_info.get('pageCount')) # 总页数
                 total_info = (int)(basic_info.get('pageSize')) * pageCount # 总记录数
                 logger.info(f'总记录数: {total_info}, 总页数: {pageCount}')
@@ -138,10 +137,11 @@ def get_data():
     for item in unique_data:
         item['submitTime'] = format_date(item['submitTime'])
     
-    # 读取res.csv中的现有数据
+    # 读取对应contestId的CSV文件中的现有数据
     existing_data = {}
+    csv_filename = f'{contest_id}_res.csv'
     try:
-        with open('res.csv', 'r', newline='', encoding='utf-8') as f:
+        with open(csv_filename, 'r', newline='', encoding='utf-8') as f:
             reader = csv.DictReader(f)
             for row in reader:
                 key = f"{row['userId']}_{row['problemId']}"
@@ -149,10 +149,12 @@ def get_data():
                 if key not in existing_data or existing_time > datetime.strptime(existing_data[key]['submitTime'], '%Y-%m-%d %H:%M:%S'):
                     existing_data[key] = row
     except FileNotFoundError:
+        logger.info(f'{csv_filename}文件不存在，创建新文件并写入表头')
         # 如果文件不存在，创建文件并写入表头
-        with open('res.csv', 'w', newline='', encoding='utf-8') as f:
+        with open(csv_filename, 'w', newline='', encoding='utf-8') as f:
             writer = csv.DictWriter(f, fieldnames=['userId', 'userName', 'problemId', 'submitTime', 'balloonStatus'])
             writer.writeheader()
+        return jsonify([])
     
     # 合并新数据和现有数据，保留最新的提交记录
     merged_data = existing_data.copy()
@@ -169,15 +171,15 @@ def get_data():
                 'balloonStatus': merged_data.get(key, {}).get('balloonStatus', 'not_given')
             }
     
-    # 将合并后的数据写入res.csv
+    # 将合并后的数据写入对应contestId的CSV文件
     try:
-        with open('res.csv', 'w', newline='', encoding='utf-8') as f:
+        with open(csv_filename, 'w', newline='', encoding='utf-8') as f:
             writer = csv.DictWriter(f, fieldnames=['userId', 'userName', 'problemId', 'submitTime', 'balloonStatus'])
             writer.writeheader()
             writer.writerows(merged_data.values())
-        logger.info('数据已成功保存到res.csv文件')
+        logger.info(f'数据已成功保存到{csv_filename}文件')
     except Exception as e:
-        logger.error(f'保存数据到res.csv失败: {str(e)}')
+        logger.error(f'保存数据到{csv_filename}失败: {str(e)}')
     
     # 返回最新的数据
     return jsonify(list(merged_data.values()))
@@ -213,10 +215,17 @@ def update_balloon_status():
         'updateTime': datetime.now().isoformat()
     }
     
-    # 更新res.csv文件中的气球状态
+    # 从请求中获取contestId
+    contest_id = data.get('contestId')
+    if not contest_id:
+        return jsonify({'error': '缺少contestId参数'}), 400
+        
+    csv_filename = f'{contest_id}_res.csv'
+    
+    # 更新对应contestId的CSV文件中的气球状态
     try:
         rows = []
-        with open('res.csv', 'r', newline='', encoding='utf-8') as f:
+        with open(csv_filename, 'r', newline='', encoding='utf-8') as f:
             reader = csv.DictReader(f)
             rows = list(reader)
             
@@ -224,7 +233,7 @@ def update_balloon_status():
             if row['userId'] == user_id and row['problemId'] == problem_id:
                 row['balloonStatus'] = 'given' if is_given else 'not_given'
         
-        with open('res.csv', 'w', newline='', encoding='utf-8') as f:
+        with open(csv_filename, 'w', newline='', encoding='utf-8') as f:
             writer = csv.DictWriter(f, fieldnames=['userId', 'userName', 'problemId', 'submitTime', 'balloonStatus'])
             writer.writeheader()
             writer.writerows(rows)
@@ -236,6 +245,23 @@ def update_balloon_status():
 
 @app.route('/balloon/status', methods=['GET'])
 def get_balloon_status():
+    contest_id = request.args.get('contestId')
+    if not contest_id:
+        return jsonify({'error': '缺少contestId参数'}), 400
+        
+    csv_filename = f'{contest_id}_res.csv'
+    try:
+        with open(csv_filename, 'r', newline='', encoding='utf-8') as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                key = f"{row['userId']}_{row['problemId']}"
+                balloon_status[key] = {
+                    'isGiven': row['balloonStatus'] == 'given',
+                    'updateTime': datetime.now().isoformat()
+                }
+    except FileNotFoundError:
+        logger.info(f'{csv_filename}文件不存在，所有气球状态默认为未发放')
+    
     return jsonify(balloon_status)
 
 if __name__ == '__main__':

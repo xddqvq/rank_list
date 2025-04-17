@@ -181,8 +181,6 @@
         async function fetchBalloonColors() {
             try {
                 const response = await fetch('/api/balloon-colors');
-                console.log('获取气球颜色配置响应:', response.json); // Add this line for debugging
-                if (!response.ok) throw new Error('获取气球颜色配置失败');
                 balloonColors = await response.json();
             } catch (error) {
                 console.error('获取气球颜色配置失败:', error);
@@ -234,7 +232,7 @@
                 const [submissionData, seatResponse, balloonStatusResponse] = await Promise.all([
                     fetchSubmissionData(),
                     fetch('/a.csv'),
-                    fetch('/balloon/status')
+                    fetch(`/balloon/status?contestId=${document.getElementById('contestId').value}`)
                 ]);
 
                 const seatData = await seatResponse.text();
@@ -353,10 +351,17 @@
             // 这里可以添加保存状态的逻辑
             const userId = button.dataset.userId;
             const problemId = button.dataset.problemId;
-            saveBalloonStatus(userId, problemId, !isGiven);
+            const contestId = document.getElementById('contestId').value;
+            saveBalloonStatus(userId, problemId, !isGiven, contestId);
         }
 
-        async function saveBalloonStatus(userId, problemId, isGiven) {
+        async function saveBalloonStatus(userId, problemId, isGiven, contestId) {
+            console.log('保存状态请求:', {
+                contestId:contestId,
+                userId: userId,
+                problemId: problemId,
+                isGiven: isGiven
+            });
             try {
                 const response = await fetch('/balloon/status', {
                     method: 'POST',
@@ -364,6 +369,7 @@
                         'Content-Type': 'application/json'
                     },
                     body: JSON.stringify({
+                        contestId:contestId,
                         userId: userId,
                         problemId: problemId,
                         isGiven: isGiven
