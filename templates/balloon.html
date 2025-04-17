@@ -19,7 +19,17 @@
             margin-bottom: 20px;
         }
 
-        .filter-container select {
+        .form-group {
+            margin-bottom: 10px;
+        }
+
+        .form-group label {
+            display: inline-block;
+            margin-right: 10px;
+        }
+
+        .form-group input,
+        .form-group select {
             padding: 8px;
             border-radius: 4px;
             border: 1px solid #ddd;
@@ -99,6 +109,36 @@
 </head>
 <body>
     <div class="filter-container">
+        <div class="form-group">
+            <label for="contestId">比赛ID：</label>
+            <input type="text" id="contestId" value="104226">
+        </div>
+        <div class="form-group">
+            <label for="statusTypeFilter">运行结果：</label>
+            <input type="text" id="statusTypeFilter" value="5" disabled>
+            <!-- <select id="statusTypeFilter" class="form-control" value = "5">
+                <option value="">全部</option>
+                <option value="5">运行正确</option>
+                <option value="4">答案错误</option>
+                <option value="3">运行错误</option>
+                <option value="1">内存超限</option>
+                <option value="0">正在判题</option>
+                <option value="21">返回非零</option>
+                <option value="20">代码太长</option>
+                <option value="16">段错误</option>
+                <option value="15">浮点错误</option>
+                <option value="14">内部错误</option>
+                <option value="13">格式错误</option>
+                <option value="12">编译错误</option>
+                <option value="10">输出超限</option>
+                <option value="7">内存超限</option>
+                <option value="6">运行超时</option>                
+            </select> -->
+        </div>
+        <div class="form-group">
+            <label for="refresh-interval">刷新间隔（秒）：</label>
+            <input type="number" id="refresh-interval" value="60" min="1" max="600">
+        </div>
         <select id="statusFilter">
             <option value="all">全部状态</option>
             <option value="given">已发放</option>
@@ -114,6 +154,7 @@
                     <th>区域</th>
                     <th>座位</th>
                     <th>题目</th>
+                    <th>气球颜色</th>
                     <th>提交时间</th>
                     <th>气球状态</th>
                 </tr>
@@ -135,6 +176,18 @@
         let globalSubmissions = [];
         let globalSeatMap = null;
         let globalBalloonStatusData = null;
+        let balloonColors = {};
+
+        async function fetchBalloonColors() {
+            try {
+                const response = await fetch('/api/balloon-colors');
+                console.log('获取气球颜色配置响应:', response.json); // Add this line for debugging
+                if (!response.ok) throw new Error('获取气球颜色配置失败');
+                balloonColors = await response.json();
+            } catch (error) {
+                console.error('获取气球颜色配置失败:', error);
+            }
+        }
 
         document.getElementById('statusFilter').addEventListener('change', function() {
             currentPage = 1;
@@ -149,19 +202,45 @@
             }
         }
 
+        let refreshTimer;
+        function updateRefreshInterval() {
+            const seconds = document.getElementById('refresh-interval').value;
+            const milliseconds = Math.max(1000, seconds * 1000);
+            
+            if (refreshTimer) {
+                clearInterval(refreshTimer);
+            }
+            refreshTimer = setInterval(loadData, milliseconds);
+        }
+
+        async function fetchSubmissionData() {
+            const contestId = document.getElementById('contestId').value;
+            const statusTypeFilter = document.getElementById('statusTypeFilter').value;
+            
+            try {
+                const response = await fetch(`/api/data?contestId=${contestId}&statusTypeFilter=${statusTypeFilter}`);
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                return await response.json();
+            } catch (error) {
+                console.error('获取数据失败:', error);
+                return [];
+            }
+        }
+
         async function loadData() {
             try {
-                const [submissionResponse, seatResponse, balloonStatusResponse] = await Promise.all([
-                    fetch('/res.csv'),
+                const [submissionData, seatResponse, balloonStatusResponse] = await Promise.all([
+                    fetchSubmissionData(),
                     fetch('/a.csv'),
                     fetch('/balloon/status')
                 ]);
 
-                const submissionData = await submissionResponse.text();
                 const seatData = await seatResponse.text();
                 const balloonStatusData = await balloonStatusResponse.json();
 
-                const submissions = parseCSV(submissionData);
+                const submissions = submissionData;
                 // 按提交时间排序
                 submissions.sort((a, b) => new Date(b.submitTime) - new Date(a.submitTime));
                 const seats = parseCSV(seatData);
@@ -216,18 +295,18 @@
                 if (statusFilter === 'not-given') return !balloonStatus.isGiven;
                 return true;
             });
-
+        
             // 计算分页信息
             totalPages = Math.ceil(filteredData.length / pageSize);
             const start = (currentPage - 1) * pageSize;
             const end = Math.min(start + pageSize, filteredData.length);
             const pageData = filteredData.slice(start, end);
-
+        
             // 更新分页控件
             document.getElementById('prevPage').disabled = currentPage === 1;
             document.getElementById('nextPage').disabled = currentPage === totalPages;
             document.getElementById('pageInfo').textContent = `第 ${currentPage} 页，共 ${totalPages} 页`;
-
+        
             pageData.forEach(submission => {
                 const seatInfo = seatMap.get(submission.userId) || { area: '未知', address: '未知' };
                 const row = document.createElement('tr');
@@ -243,6 +322,7 @@
                     <td>${seatInfo.area}</td>
                     <td>${seatInfo.address}</td>
                     <td>${submission.problemId}</td>
+                    <td>${generateBalloonColorDisplay(submission.problemId)}</td>
                     <td>${submission.submitTime}</td>
                     <td>
                         <button class="balloon-status ${buttonClass}" 
@@ -253,7 +333,7 @@
                         </button>
                     </td>
                 `;
-
+        
                 tableBody.appendChild(row);
             });
         }
@@ -305,7 +385,38 @@
         }
 
         // 页面加载完成后加载数据
-        document.addEventListener('DOMContentLoaded', loadData);
+        document.addEventListener('DOMContentLoaded', async () => {
+            await fetchBalloonColors();
+            loadData();
+            // 绑定刷新间隔更新事件
+            document.getElementById('refresh-interval').addEventListener('change', updateRefreshInterval);
+            // 绑定筛选条件变化事件
+            document.getElementById('contestId').addEventListener('change', loadData);
+            document.getElementById('statusTypeFilter').addEventListener('change', loadData);
+            // 初始化自动刷新
+            updateRefreshInterval();
+        });
+
+        function generateBalloonColorDisplay(problemId) {
+            // 获取气球颜色信息，如果不存在则使用默认值
+            const defaultBalloonInfo = { hexColor: '#C8C8C8', balloonColor: '未知' };
+            const balloonInfo = balloonColors[problemId] || defaultBalloonInfo;
+            
+            // 确保hexColor是有效的颜色值
+            const hexColor = typeof balloonInfo.hexColor === 'string' && balloonInfo.hexColor.trim()
+                ? balloonInfo.hexColor
+                : defaultBalloonInfo.hexColor;
+            
+            // 确保气球颜色名称是有效的字符串
+            const colorName = typeof balloonInfo.balloonColor === 'string' && balloonInfo.balloonColor.trim()
+                ? balloonInfo.balloonColor
+                : defaultBalloonInfo.balloonColor;
+            
+            return (
+                '<div style="background-color: ' + hexColor + '; width: 20px; height: 20px; border-radius: 50%; display: inline-block; border: 1px solid #ddd;"></div> ' +
+                colorName
+            );
+        }
     </script>
 </body>
 </html>

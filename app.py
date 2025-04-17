@@ -1,3 +1,4 @@
+from math import log
 from flask import Flask, render_template, request, jsonify
 import requests
 from datetime import datetime
@@ -97,10 +98,6 @@ def format_date(timestamp):
     return datetime.fromtimestamp(timestamp/1000).strftime('%Y-%m-%d %H:%M:%S')
 
 @app.route('/')
-def index():
-    return render_template('index.html')
-
-@app.route('/balloon')
 def balloon():
     return render_template('balloon.html')
 
@@ -141,42 +138,64 @@ def get_data():
     for item in unique_data:
         item['submitTime'] = format_date(item['submitTime'])
     
-    # 将数据保存到res.csv文件
+    # 读取res.csv中的现有数据
+    existing_data = {}
     try:
-        # 读取已有数据的最后一条记录时间
-        last_submit_time = None
-        try:
-            with open('res.csv', 'r', newline='', encoding='utf-8') as f:
-                reader = csv.DictReader(f)
-                rows = list(reader)
-                # 如果文件存在但为空，或者没有有效数据行，last_submit_time保持为None
-                if rows:
-                    last_submit_time = datetime.strptime(rows[-1]['submitTime'], '%Y-%m-%d %H:%M:%S')
-        except FileNotFoundError:
-            # 如果文件不存在，创建文件并写入表头
-            with open('res.csv', 'w', newline='', encoding='utf-8') as f:
-                writer = csv.DictWriter(f, fieldnames=['userId', 'userName', 'problemId', 'submitTime', 'balloonStatus'])
-                writer.writeheader()
-
-        # 追加写入新数据
-        with open('res.csv', 'a', newline='', encoding='utf-8') as f:
+        with open('res.csv', 'r', newline='', encoding='utf-8') as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                key = f"{row['userId']}_{row['problemId']}"
+                existing_time = datetime.strptime(row['submitTime'], '%Y-%m-%d %H:%M:%S')
+                if key not in existing_data or existing_time > datetime.strptime(existing_data[key]['submitTime'], '%Y-%m-%d %H:%M:%S'):
+                    existing_data[key] = row
+    except FileNotFoundError:
+        # 如果文件不存在，创建文件并写入表头
+        with open('res.csv', 'w', newline='', encoding='utf-8') as f:
             writer = csv.DictWriter(f, fieldnames=['userId', 'userName', 'problemId', 'submitTime', 'balloonStatus'])
-            for item in unique_data:
-                current_time = datetime.strptime(item['submitTime'], '%Y-%m-%d %H:%M:%S')
-                # 只写入时间在最后一条记录之后的数据
-                if last_submit_time is None or current_time > last_submit_time:
-                    writer.writerow({
-                        'userId': item['userId'],
-                        'userName': item['userName'],
-                        'problemId': item['index'],
-                        'submitTime': item['submitTime'],
-                        'balloonStatus': 'not_given'
-                    })
-        logger.info('数据已成功追加保存到res.csv文件')
+            writer.writeheader()
+    
+    # 合并新数据和现有数据，保留最新的提交记录
+    merged_data = existing_data.copy()
+    for item in unique_data:
+        key = f"{item['userId']}_{item['index']}"
+        current_time = datetime.strptime(item['submitTime'], '%Y-%m-%d %H:%M:%S')
+        
+        if key not in merged_data or current_time > datetime.strptime(merged_data[key]['submitTime'], '%Y-%m-%d %H:%M:%S'):
+            merged_data[key] = {
+                'userId': item['userId'],
+                'userName': item['userName'],
+                'problemId': item['index'],
+                'submitTime': item['submitTime'],
+                'balloonStatus': merged_data.get(key, {}).get('balloonStatus', 'not_given')
+            }
+    
+    # 将合并后的数据写入res.csv
+    try:
+        with open('res.csv', 'w', newline='', encoding='utf-8') as f:
+            writer = csv.DictWriter(f, fieldnames=['userId', 'userName', 'problemId', 'submitTime', 'balloonStatus'])
+            writer.writeheader()
+            writer.writerows(merged_data.values())
+        logger.info('数据已成功保存到res.csv文件')
     except Exception as e:
         logger.error(f'保存数据到res.csv失败: {str(e)}')
     
-    return jsonify(unique_data)
+    # 返回最新的数据
+    return jsonify(list(merged_data.values()))
+
+@app.route('/api/balloon-colors')
+def get_balloon_colors():
+    try:
+        colors = {}
+        with open('balloon_color.csv', 'r', encoding='utf-8') as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                colors[row['problemId']] = {
+                    'balloonColor': row['balloonColor'],
+                    'hexColor': row['hexColor']
+                }
+        return jsonify(colors)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/balloon/status', methods=['POST'])
 def update_balloon_status():
