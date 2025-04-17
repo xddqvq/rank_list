@@ -119,16 +119,10 @@ def get_a_csv():
 @app.route('/api/data')
 def get_data():
     # 从查询参数中获取比赛ID和状态过滤器
-    contest_id = request.args.get('contestId', '104226')
+    # contest_id = request.args.get('contestId', '104226')
+    contest_id = request.args.get('contestId')
     # status_type_filter = request.args.get('statusTypeFilter')
     status_type_filter = 5
-    
-    # 只有当statusTypeFilter有值时才转换为整数
-    if status_type_filter is not None:
-        try:
-            status_type_filter = int(status_type_filter)
-        except (ValueError, TypeError):
-            status_type_filter = None
     
     data = fetch_data(contest_id, status_type_filter)
     unique_data = remove_duplicates(data)

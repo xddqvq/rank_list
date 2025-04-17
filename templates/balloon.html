@@ -111,7 +111,7 @@
     <div class="filter-container">
         <div class="form-group">
             <label for="contestId">比赛ID：</label>
-            <input type="text" id="contestId" value="104226">
+            <input type="text" id="contestId">
         </div>
         <div class="form-group">
             <label for="statusTypeFilter">运行结果：</label>
@@ -392,12 +392,23 @@
 
         // 页面加载完成后加载数据
         document.addEventListener('DOMContentLoaded', async () => {
+            // 从localStorage读取比赛ID
+            const savedContestId = localStorage.getItem('contestId');
+            if (savedContestId) {
+                document.getElementById('contestId').value = savedContestId;
+                loadData();
+            }
+            
             await fetchBalloonColors();
             loadData();
             // 绑定刷新间隔更新事件
             document.getElementById('refresh-interval').addEventListener('change', updateRefreshInterval);
             // 绑定筛选条件变化事件
-            document.getElementById('contestId').addEventListener('change', loadData);
+            document.getElementById('contestId').addEventListener('change', () => {
+                // 保存比赛ID到localStorage
+                localStorage.setItem('contestId', document.getElementById('contestId').value);
+                loadData();
+            });
             document.getElementById('statusTypeFilter').addEventListener('change', loadData);
             // 初始化自动刷新
             updateRefreshInterval();
