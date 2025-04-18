@@ -17,15 +17,21 @@
             padding: 15px;
             box-shadow: 0 2px 4px rgba(0,0,0,0.1);
             margin-bottom: 20px;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 15px; 
         }
 
         .form-group {
-            margin-bottom: 10px;
+            /* Removed margin-bottom, using gap in container */
+            display: flex; /* Align label and input/select */
+            align-items: center; /* Vertically center items */
+            gap: 5px; /* Space between label and input */
         }
 
         .form-group label {
-            display: inline-block;
-            margin-right: 10px;
+            /* Removed display: inline-block and margin-right */
+            white-space: nowrap; /* Prevent label text from wrapping */
         }
 
         .form-group input,
@@ -33,7 +39,7 @@
             padding: 8px;
             border-radius: 4px;
             border: 1px solid #ddd;
-            margin-right: 10px;
+            /* Removed margin-right */
         }
 
         .pagination {
@@ -60,13 +66,14 @@
         .pagination span {
             margin: 0 10px;
         }
-        
+
         .table-container {
             background-color: white;
             border-radius: 8px;
             padding: 15px;
             box-shadow: 0 2px 4px rgba(0,0,0,0.1);
             margin-bottom: 20px;
+            overflow-x: auto; /* Add horizontal scroll for smaller screens */
         }
 
         table {
@@ -78,6 +85,7 @@
             padding: 12px;
             text-align: left;
             border-bottom: 1px solid #ddd;
+            white-space: nowrap; /* Prevent cell content wrapping */
         }
 
         th {
@@ -116,34 +124,25 @@
         <div class="form-group">
             <label for="statusTypeFilter">运行结果：</label>
             <input type="text" id="statusTypeFilter" value="5" disabled>
-            <!-- <select id="statusTypeFilter" class="form-control" value = "5">
-                <option value="">全部</option>
-                <option value="5">运行正确</option>
-                <option value="4">答案错误</option>
-                <option value="3">运行错误</option>
-                <option value="1">内存超限</option>
-                <option value="0">正在判题</option>
-                <option value="21">返回非零</option>
-                <option value="20">代码太长</option>
-                <option value="16">段错误</option>
-                <option value="15">浮点错误</option>
-                <option value="14">内部错误</option>
-                <option value="13">格式错误</option>
-                <option value="12">编译错误</option>
-                <option value="10">输出超限</option>
-                <option value="7">内存超限</option>
-                <option value="6">运行超时</option>                
-            </select> -->
         </div>
         <div class="form-group">
             <label for="refresh-interval">刷新间隔（秒）：</label>
             <input type="number" id="refresh-interval" value="60" min="1" max="600">
         </div>
-        <select id="statusFilter">
-            <option value="all">全部状态</option>
-            <option value="given">已发放</option>
-            <option value="not-given">未发放</option>
-        </select>
+        <div class="form-group">
+            <label for="areaFilter">区域：</label>
+            <select id="areaFilter">
+                <option value="all">所有区域</option>
+                </select>
+        </div>
+        <div class="form-group">
+             <label for="statusFilter">气球状态：</label>
+            <select id="statusFilter">
+                <option value="all">全部状态</option>
+                <option value="given">已发放</option>
+                <option value="not-given">未发放</option>
+            </select>
+        </div>
     </div>
     <div class="table-container">
         <table id="balloonTable">
@@ -170,267 +169,458 @@
 
     <script>
         let currentPage = 1;
-        let pageSize = 10;
+        let pageSize = 10; // You can adjust page size
         let filteredData = [];
         let totalPages = 1;
         let globalSubmissions = [];
         let globalSeatMap = null;
         let globalBalloonStatusData = null;
         let balloonColors = {};
+        let uniqueAreas = new Set(); // To store unique areas
 
         async function fetchBalloonColors() {
             try {
                 const response = await fetch('/api/balloon-colors');
+                if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
                 balloonColors = await response.json();
             } catch (error) {
                 console.error('获取气球颜色配置失败:', error);
             }
         }
 
+        // --- Event listener for Status Filter ---
         document.getElementById('statusFilter').addEventListener('change', function() {
-            currentPage = 1;
-            renderTable(globalSubmissions, globalSeatMap, globalBalloonStatusData);
+            currentPage = 1; // Reset page when filter changes
+            renderTable(); // Re-render with current data
+        });
+
+        // --- Event listener for Area Filter ---
+        document.getElementById('areaFilter').addEventListener('change', function() {
+            currentPage = 1; // Reset page when filter changes
+            renderTable(); // Re-render with current data
         });
 
         function changePage(delta) {
             const newPage = currentPage + delta;
             if (newPage >= 1 && newPage <= totalPages) {
                 currentPage = newPage;
-                renderTable(globalSubmissions, globalSeatMap, globalBalloonStatusData);
+                renderTable(); // Re-render with current data
             }
         }
 
         let refreshTimer;
         function updateRefreshInterval() {
             const seconds = document.getElementById('refresh-interval').value;
-            const milliseconds = Math.max(1000, seconds * 1000);
-            
+            const milliseconds = Math.max(1000, seconds * 1000); // Ensure at least 1 second
+
             if (refreshTimer) {
                 clearInterval(refreshTimer);
             }
+            console.log(`设置自动刷新间隔: ${milliseconds / 1000} 秒`);
             refreshTimer = setInterval(loadData, milliseconds);
         }
 
         async function fetchSubmissionData() {
             const contestId = document.getElementById('contestId').value;
-            const statusTypeFilter = document.getElementById('statusTypeFilter').value;
-            
+            // statusTypeFilter is now fixed to 5 in the input, but if you fetch it:
+            // const statusTypeFilter = document.getElementById('statusTypeFilter').value;
+            const statusTypeFilter = 5; // Hardcoded as per disabled input
+
+            if (!contestId) {
+                console.warn("比赛ID为空，不获取提交数据。");
+                return []; // Return empty if no contestId
+            }
+
+            console.log(`获取提交数据: contestId=${contestId}, statusTypeFilter=${statusTypeFilter}`);
             try {
-                const response = await fetch(`/api/data?contestId=${contestId}&statusTypeFilter=${statusTypeFilter}`);
+                // Use the backend endpoint that already filters by status=5
+                const response = await fetch(`/api/data?contestId=${contestId}`);
                 if (!response.ok) {
-                    throw new Error(`HTTP error! status: ${response.status}`);
+                    // Try to get error message from backend response
+                    let errorMsg = `HTTP error! status: ${response.status}`;
+                    try {
+                        const errData = await response.json();
+                        errorMsg = errData.error || errorMsg;
+                    } catch(e) { /* Ignore if response is not JSON */ }
+                    throw new Error(errorMsg);
                 }
-                return await response.json();
+                const data = await response.json();
+                console.log(`成功获取 ${data.length} 条提交记录。`);
+                return data;
             } catch (error) {
-                console.error('获取数据失败:', error);
-                return [];
+                console.error('获取提交数据失败:', error);
+                alert(`获取提交数据失败: ${error.message}`); // Show error to user
+                return []; // Return empty on error
+            }
+        }
+
+        async function fetchBalloonStatusData() {
+            const contestId = document.getElementById('contestId').value;
+            if (!contestId) {
+                 console.warn("比赛ID为空，不获取气球状态。");
+                return {};
+            }
+             console.log(`获取气球状态: contestId=${contestId}`);
+            try {
+                 const response = await fetch(`/balloon/status?contestId=${contestId}`);
+                 if (!response.ok) {
+                     throw new Error(`HTTP error! status: ${response.status}`);
+                 }
+                 const data = await response.json();
+                 console.log(`成功获取 ${Object.keys(data).length} 条气球状态记录。`);
+                 return data;
+            } catch (error) {
+                 console.error('获取气球状态失败:', error);
+                 return {}; // Return empty on error
             }
         }
 
         async function loadData() {
+            console.log("开始加载数据...");
+            const tableBody = document.getElementById('tableBody');
+            tableBody.innerHTML = '<tr><td colspan="8">正在加载...</td></tr>'; // Show loading state
+
             try {
-                const [submissionData, seatResponse, balloonStatusResponse] = await Promise.all([
-                    fetchSubmissionData(),
-                    fetch('/a.csv'),
-                    fetch(`/balloon/status?contestId=${document.getElementById('contestId').value}`)
-                ]);
+                const contestId = document.getElementById('contestId').value;
 
-                const seatData = await seatResponse.text();
-                const balloonStatusData = await balloonStatusResponse.json();
+                 // Fetch seat data (a.csv) and balloon status in parallel
+                 const [seatResponse, balloonStatusData] = await Promise.all([
+                     fetch('/a.csv'),
+                     fetchBalloonStatusData() // Use the new function
+                 ]);
 
-                const submissions = submissionData;
-                // 按提交时间排序
-                submissions.sort((a, b) => new Date(b.submitTime) - new Date(a.submitTime));
-                const seats = parseCSV(seatData);
+                 if (!seatResponse.ok) throw new Error(`无法加载 a.csv: ${seatResponse.status}`);
+                 const seatDataText = await seatResponse.text();
 
+                // Fetch submission data *after* checking contestId
+                const submissionData = await fetchSubmissionData();
+
+                // --- Process Seat Data (a.csv) ---
+                const seats = parseCSV(seatDataText);
                 const seatMap = new Map();
+                uniqueAreas.clear(); // Clear previous areas
                 seats.forEach(seat => {
                     if (seat.userId) {
-                        seatMap.set(seat.userId, {
-                            area: seat.area,
-                            address: seat.address
+                        seatMap.set(String(seat.userId).trim(), { // Ensure userId is string and trimmed
+                            area: seat.area ? seat.area.trim() : '未知区域', // Handle missing/empty area
+                            address: seat.address ? seat.address.trim() : '未知座位' // Handle missing/empty address
                         });
+                        if (seat.area && seat.area.trim()) {
+                             uniqueAreas.add(seat.area.trim()); // Add valid area to the set
+                        }
                     }
                 });
+                console.log(`解析了 ${seatMap.size} 条座位映射，找到 ${uniqueAreas.size} 个唯一区域。`);
+                populateAreaFilterDropdown(); // Populate the dropdown *after* parsing a.csv
 
-                globalSubmissions = submissions;
+                // --- Store global data ---
+                // Sort submissions by time (descending - newest first)
+                // Your backend /api/data should ideally return sorted data or allow sorting params
+                // If backend doesn't sort, sort here:
+                globalSubmissions = submissionData.sort((a, b) => new Date(b.submitTime) - new Date(a.submitTime));
                 globalSeatMap = seatMap;
                 globalBalloonStatusData = balloonStatusData;
-                renderTable(submissions, seatMap, balloonStatusData);
+
+                // --- Initial Render ---
+                currentPage = 1; // Reset page on full data load
+                renderTable(); // Render with the new data
+
             } catch (error) {
-                console.error('Error loading data:', error);
+                console.error('加载数据过程中出错:', error);
+                tableBody.innerHTML = `<tr><td colspan="8">加载数据失败: ${error.message}</td></tr>`;
+                // Optionally clear global data on failure
+                // globalSubmissions = [];
+                // globalSeatMap = null;
+                // globalBalloonStatusData = {};
             }
         }
 
+        // --- Function to populate Area Filter Dropdown ---
+        function populateAreaFilterDropdown() {
+            const areaFilterSelect = document.getElementById('areaFilter');
+            const currentSelection = areaFilterSelect.value; // Preserve selection if possible
+
+            // Clear existing options (keep "All Areas")
+            while (areaFilterSelect.options.length > 1) {
+                areaFilterSelect.remove(1);
+            }
+
+            // Add sorted unique areas
+            const sortedAreas = Array.from(uniqueAreas).sort();
+            sortedAreas.forEach(area => {
+                const option = document.createElement('option');
+                option.value = area;
+                option.textContent = area;
+                areaFilterSelect.appendChild(option);
+            });
+
+             // Restore previous selection if it still exists
+            if (Array.from(areaFilterSelect.options).some(opt => opt.value === currentSelection)) {
+                areaFilterSelect.value = currentSelection;
+            }
+             console.log("区域筛选器已填充。");
+        }
+
+
         function parseCSV(csvText) {
-            const lines = csvText.split('\n');
+            if (!csvText) return []; // Handle empty input
+            const lines = csvText.split(/[\r\n]+/).filter(line => line.trim() !== ''); // Split lines, remove empty ones
+            if (lines.length < 1) return []; // No lines or only header
+
             const headers = lines[0].split(',').map(h => h.trim());
             const results = [];
 
             for (let i = 1; i < lines.length; i++) {
-                if (!lines[i].trim()) continue;
+                // Basic CSV splitting (doesn't handle commas within quotes)
                 const values = lines[i].split(',').map(v => v.trim());
+                if (values.length < headers.length) {
+                    console.warn(`Skipping malformed CSV line ${i + 1}: ${lines[i]}`);
+                    continue; // Skip lines with fewer columns than headers
+                }
                 const obj = {};
                 headers.forEach((header, index) => {
-                    obj[header] = values[index];
+                    // Only assign if value exists, prevent index out of bounds
+                    obj[header] = values[index] !== undefined ? values[index] : '';
                 });
                 results.push(obj);
             }
-
             return results;
         }
 
-        function renderTable(submissions, seatMap, balloonStatusData) {
-            const tableBody = document.getElementById('tableBody');
-            tableBody.innerHTML = '';
-            
-            // 根据状态筛选数据
-            const statusFilter = document.getElementById('statusFilter').value;
-            filteredData = submissions.filter(submission => {
-                const statusKey = `${submission.userId}_${submission.problemId}`;
-                const balloonStatus = balloonStatusData[statusKey] || { isGiven: false };
-                if (statusFilter === 'given') return balloonStatus.isGiven;
-                if (statusFilter === 'not-given') return !balloonStatus.isGiven;
-                return true;
-            });
-        
-            // 计算分页信息
-            totalPages = Math.ceil(filteredData.length / pageSize);
+        function renderTable() {
+             console.log("开始渲染表格...");
+             const tableBody = document.getElementById('tableBody');
+             tableBody.innerHTML = ''; // Clear previous content
+
+             if (!globalSubmissions || !globalSeatMap || !globalBalloonStatusData) {
+                 console.warn("全局数据未准备好，无法渲染表格。");
+                 tableBody.innerHTML = '<tr><td colspan="8">数据未加载或加载失败。</td></tr>';
+                 return;
+             }
+
+             // --- Apply Filters ---
+             const statusFilter = document.getElementById('statusFilter').value;
+             const areaFilter = document.getElementById('areaFilter').value;
+             console.log(`应用筛选: 状态=${statusFilter}, 区域=${areaFilter}`);
+
+             filteredData = globalSubmissions.filter(submission => {
+                 const userIdStr = String(submission.userId); // Ensure string for map lookup
+                 const seatInfo = globalSeatMap.get(userIdStr) || { area: '未知区域', address: '未知座位' }; // Default if not in map
+
+                 // 1. Area Filter
+                 if (areaFilter !== 'all' && seatInfo.area !== areaFilter) {
+                     return false; // Exclude if area doesn't match and filter is not 'all'
+                 }
+
+                 // 2. Status Filter
+                 const statusKey = `${userIdStr}_${submission.problemId}`;
+                 // Use status from fetched data first, fallback to submission data's status (less reliable)
+                 const statusInfo = globalBalloonStatusData[statusKey];
+                 const isGiven = statusInfo ? statusInfo.isGiven : (submission.balloonStatus === 'given'); // Check fetched status
+
+                 if (statusFilter === 'given' && !isGiven) {
+                     return false; // Exclude if filter is 'given' and status is not 'given'
+                 }
+                 if (statusFilter === 'not-given' && isGiven) {
+                      return false; // Exclude if filter is 'not-given' and status is 'given'
+                 }
+
+                 return true; // Include if passes all filters
+             });
+            console.log(`筛选后剩余 ${filteredData.length} 条记录。`);
+
+            // --- Calculate Pagination ---
+            totalPages = Math.max(1, Math.ceil(filteredData.length / pageSize)); // Ensure totalPages is at least 1
+            currentPage = Math.min(currentPage, totalPages); // Adjust currentPage if it exceeds totalPages
             const start = (currentPage - 1) * pageSize;
             const end = Math.min(start + pageSize, filteredData.length);
             const pageData = filteredData.slice(start, end);
-        
-            // 更新分页控件
+            console.log(`渲染页面 ${currentPage}/${totalPages}, 显示记录 ${start + 1}-${end}。`);
+
+            // --- Update Pagination Controls ---
             document.getElementById('prevPage').disabled = currentPage === 1;
             document.getElementById('nextPage').disabled = currentPage === totalPages;
-            document.getElementById('pageInfo').textContent = `第 ${currentPage} 页，共 ${totalPages} 页`;
-        
-            pageData.forEach(submission => {
-                const seatInfo = seatMap.get(submission.userId) || { area: '未知', address: '未知' };
-                const row = document.createElement('tr');
-                
-                const statusKey = `${submission.userId}_${submission.problemId}`;
-                const balloonStatus = balloonStatusData[statusKey] || { isGiven: false };
-                const buttonClass = balloonStatus.isGiven ? 'balloon-given' : 'balloon-not-given';
-                const buttonText = balloonStatus.isGiven ? '已发放' : '未发放';
-                
-                row.innerHTML = `
-                    <td>${submission.userId}</td>
-                    <td>${submission.userName || '未知'}</td>
-                    <td>${seatInfo.area}</td>
-                    <td>${seatInfo.address}</td>
-                    <td>${submission.problemId}</td>
-                    <td>${generateBalloonColorDisplay(submission.problemId)}</td>
-                    <td>${submission.submitTime}</td>
-                    <td>
-                        <button class="balloon-status ${buttonClass}" 
-                                onclick="toggleBalloonStatus(this)" 
-                                data-user-id="${submission.userId}"
-                                data-problem-id="${submission.problemId}">
-                            ${buttonText}
-                        </button>
-                    </td>
-                `;
-        
-                tableBody.appendChild(row);
-            });
+            document.getElementById('pageInfo').textContent = `第 ${currentPage} 页 / 共 ${totalPages} 页 (${filteredData.length} 条)`; // More info
+
+            // --- Render Rows ---
+             if (pageData.length === 0) {
+                 tableBody.innerHTML = '<tr><td colspan="8">没有符合筛选条件的记录。</td></tr>';
+             } else {
+                pageData.forEach(submission => {
+                    const userIdStr = String(submission.userId); // Use string consistently
+                    const seatInfo = globalSeatMap.get(userIdStr) || { area: '未知区域', address: '未知座位' };
+                    const row = document.createElement('tr');
+
+                    const statusKey = `${userIdStr}_${submission.problemId}`;
+                    // Prioritize real-time status data
+                    const statusInfo = globalBalloonStatusData[statusKey];
+                    const isGiven = statusInfo ? statusInfo.isGiven : (submission.balloonStatus === 'given');
+                    const buttonClass = isGiven ? 'balloon-given' : 'balloon-not-given';
+                    const buttonText = isGiven ? '已发放' : '未发放';
+
+                    row.innerHTML = `
+                        <td>${submission.userId}</td>
+                        <td>${submission.userName || '未知'}</td>
+                        <td>${seatInfo.area}</td>
+                        <td>${seatInfo.address}</td>
+                        <td>${submission.problemId}</td>
+                        <td>${generateBalloonColorDisplay(submission.problemId)}</td>
+                        <td>${submission.submitTime}</td>
+                        <td>
+                            <button class="balloon-status ${buttonClass}"
+                                    onclick="toggleBalloonStatus(this)"
+                                    data-user-id="${submission.userId}"
+                                    data-problem-id="${submission.problemId}">
+                                ${buttonText}
+                            </button>
+                        </td>
+                    `;
+
+                    tableBody.appendChild(row);
+                });
+            }
+             console.log("表格渲染完成。");
         }
 
-        function toggleBalloonStatus(button) {
+        // Toggle and Save Balloon Status (no major changes needed, ensure contestId is passed)
+        async function toggleBalloonStatus(button) {
             const isGiven = button.classList.contains('balloon-given');
-            if (isGiven) {
-                button.classList.remove('balloon-given');
-                button.classList.add('balloon-not-given');
-                button.textContent = '未发放';
-            } else {
-                button.classList.remove('balloon-not-given');
-                button.classList.add('balloon-given');
-                button.textContent = '已发放';
-            }
-
-            // 这里可以添加保存状态的逻辑
+            const newStateIsGiven = !isGiven; // The state we want to set it to
             const userId = button.dataset.userId;
             const problemId = button.dataset.problemId;
             const contestId = document.getElementById('contestId').value;
-            saveBalloonStatus(userId, problemId, !isGiven, contestId);
+
+             // Optimistically update UI
+             button.classList.remove(isGiven ? 'balloon-given' : 'balloon-not-given');
+             button.classList.add(newStateIsGiven ? 'balloon-given' : 'balloon-not-given');
+             button.textContent = newStateIsGiven ? '已发放' : '未发放';
+             button.disabled = true; // Disable button during save
+
+            try {
+                await saveBalloonStatus(userId, problemId, newStateIsGiven, contestId);
+                 // Update the global state in memory after successful save
+                 const statusKey = `${userId}_${problemId}`;
+                 if (!globalBalloonStatusData[statusKey]) {
+                    globalBalloonStatusData[statusKey] = {};
+                 }
+                 globalBalloonStatusData[statusKey].isGiven = newStateIsGiven;
+                 console.log(`本地状态更新: ${statusKey} -> ${newStateIsGiven}`);
+                 // Optional: Re-render if you want table sorting/filtering to immediately reflect,
+                 // but usually optimistic update is enough.
+                 // renderTable();
+            } catch (error) {
+                 // Revert UI on failure
+                 console.error('保存状态失败，正在回滚UI:', error);
+                 alert('保存状态失败，请稍后重试。');
+                 button.classList.remove(newStateIsGiven ? 'balloon-given' : 'balloon-not-given');
+                 button.classList.add(isGiven ? 'balloon-given' : 'balloon-not-given');
+                 button.textContent = isGiven ? '已发放' : '未发放';
+            } finally {
+                 button.disabled = false; // Re-enable button
+            }
         }
 
         async function saveBalloonStatus(userId, problemId, isGiven, contestId) {
-            console.log('保存状态请求:', {
-                contestId:contestId,
-                userId: userId,
-                problemId: problemId,
-                isGiven: isGiven
-            });
-            try {
-                const response = await fetch('/balloon/status', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({
-                        contestId:contestId,
-                        userId: userId,
-                        problemId: problemId,
-                        isGiven: isGiven
-                    })
-                });
-
-                if (!response.ok) {
-                    throw new Error('保存状态失败');
-                }
-                
-                // 重新加载页面数据以更新显示
-                await loadData();
-
-                console.log(`保存状态成功: 用户${userId}的题目${problemId}气球状态: ${isGiven ? '已发放' : '未发放'}`);
-            } catch (error) {
-                console.error('保存状态失败:', error);
-                alert('保存状态失败，请重试');
+            if (!contestId) {
+                 throw new Error("无法保存状态：比赛ID为空。");
             }
+            console.log('发送保存状态请求:', { contestId, userId, problemId, isGiven });
+            const response = await fetch('/balloon/status', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ contestId, userId, problemId, isGiven })
+            });
+
+            if (!response.ok) {
+                let errorMsg = '保存状态失败';
+                try {
+                     const errData = await response.json();
+                     errorMsg = errData.error || `服务器错误 ${response.status}`;
+                } catch(e) { /* Ignore if response not JSON */ }
+                 throw new Error(errorMsg);
+            }
+            // No need to reload all data here, optimistic update is done in toggleBalloonStatus
+            console.log(`保存状态成功: 用户 ${userId}, 题目 ${problemId} -> ${isGiven}`);
         }
 
-        // 页面加载完成后加载数据
+        // Initial Page Load Logic
         document.addEventListener('DOMContentLoaded', async () => {
-            // 从localStorage读取比赛ID
-            const savedContestId = localStorage.getItem('contestId');
-            if (savedContestId) {
-                document.getElementById('contestId').value = savedContestId;
-                loadData();
-            }
-            
+            console.log("DOM 加载完成。");
+            // Fetch colors early
             await fetchBalloonColors();
-            loadData();
-            // 绑定刷新间隔更新事件
-            document.getElementById('refresh-interval').addEventListener('change', updateRefreshInterval);
-            // 绑定筛选条件变化事件
-            document.getElementById('contestId').addEventListener('change', () => {
-                // 保存比赛ID到localStorage
-                localStorage.setItem('contestId', document.getElementById('contestId').value);
-                loadData();
+
+            // Load saved contestId
+            const savedContestId = localStorage.getItem('contestId');
+            const contestIdInput = document.getElementById('contestId');
+            if (savedContestId) {
+                contestIdInput.value = savedContestId;
+                console.log(`从 localStorage 加载比赛ID: ${savedContestId}`);
+                 await loadData(); // Load data if contestId exists
+            } else {
+                 console.log("未找到保存的比赛ID。");
+                 document.getElementById('tableBody').innerHTML = '<tr><td colspan="8">请输入比赛ID并加载数据。</td></tr>';
+            }
+
+            // Event listener for Contest ID change
+            contestIdInput.addEventListener('change', () => {
+                const newContestId = contestIdInput.value;
+                console.log(`比赛ID更改为: ${newContestId}`);
+                if (newContestId) {
+                     localStorage.setItem('contestId', newContestId);
+                     loadData(); // Reload data for the new contest
+                } else {
+                    // Clear table if contestId is cleared
+                    localStorage.removeItem('contestId');
+                    globalSubmissions = [];
+                    globalSeatMap = null;
+                    globalBalloonStatusData = {};
+                    document.getElementById('tableBody').innerHTML = '<tr><td colspan="8">请输入比赛ID并加载数据。</td></tr>';
+                    totalPages = 1;
+                    currentPage = 1;
+                    updatePaginationControls(); // Update controls for empty state
+                }
             });
-            document.getElementById('statusTypeFilter').addEventListener('change', loadData);
-            // 初始化自动刷新
-            updateRefreshInterval();
+
+             // Event listener for Refresh Interval change
+            document.getElementById('refresh-interval').addEventListener('change', updateRefreshInterval);
+
+            // Initial setup for auto-refresh (only if contestId is present)
+            if (contestIdInput.value) {
+                 updateRefreshInterval();
+            }
         });
 
+        // Helper to update pagination controls text/disabled state
+        function updatePaginationControls() {
+             document.getElementById('prevPage').disabled = currentPage === 1;
+             document.getElementById('nextPage').disabled = currentPage === totalPages;
+             document.getElementById('pageInfo').textContent = `第 ${currentPage} 页 / 共 ${totalPages} 页 (${filteredData.length} 条)`;
+        }
+
+
+        // Generate Balloon Color Display (remains the same)
         function generateBalloonColorDisplay(problemId) {
-            // 获取气球颜色信息，如果不存在则使用默认值
-            const defaultBalloonInfo = { hexColor: '#C8C8C8', balloonColor: '未知' };
-            const balloonInfo = balloonColors[problemId] || defaultBalloonInfo;
-            
-            // 确保hexColor是有效的颜色值
-            const hexColor = typeof balloonInfo.hexColor === 'string' && balloonInfo.hexColor.trim()
+            const defaultBalloonInfo = { hexColor: '#CCCCCC', balloonColor: '未知' }; // Grey default
+            const balloonInfo = balloonColors[String(problemId)] || defaultBalloonInfo; // Ensure key is string
+
+            const hexColor = (typeof balloonInfo.hexColor === 'string' && balloonInfo.hexColor.trim().match(/^#[0-9A-Fa-f]{6}$/))
                 ? balloonInfo.hexColor
                 : defaultBalloonInfo.hexColor;
-            
-            // 确保气球颜色名称是有效的字符串
-            const colorName = typeof balloonInfo.balloonColor === 'string' && balloonInfo.balloonColor.trim()
+
+            const colorName = (typeof balloonInfo.balloonColor === 'string' && balloonInfo.balloonColor.trim())
                 ? balloonInfo.balloonColor
                 : defaultBalloonInfo.balloonColor;
-            
+
+            // Basic luminance check for text color (optional)
+            const rgb = parseInt(hexColor.substring(1), 16);
+            const r = (rgb >> 16) & 0xff;
+            const g = (rgb >> 8) & 0xff;
+            const b = (rgb >> 0) & 0xff;
+            const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+            const textColor = luminance > 0.5 ? '#000000' : '#FFFFFF'; // Black on light, White on dark
+
             return (
-                '<div style="background-color: ' + hexColor + '; width: 20px; height: 20px; border-radius: 50%; display: inline-block; border: 1px solid #ddd;"></div> ' +
+                `<div style="background-color: ${hexColor}; color: ${textColor}; width: 20px; height: 20px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; border: 1px solid #ddd; font-size: 10px; font-weight: bold; margin-right: 5px;">${String(problemId)}</div>` + // Show problem ID in circle
                 colorName
             );
         }
